@@ -1636,6 +1636,106 @@ static int exanic_netdev_set_eeprom(struct net_device *ndev,
     return exanic_i2c_eeprom_write(priv->exanic, offset, bytes, len);
 }
 
+static int exanic_ethtool_get_rxnfc(struct net_device *net_dev,
+			  struct ethtool_rxnfc *info,
+              u32 *rule_locs)
+{
+    struct exanic_netdev_priv *priv = netdev_priv(net_dev);
+    struct exanic       *exanic = priv->exanic;
+    s32 rc = 0;
+    unsigned port_num;
+
+    #if __HAS_NETDEVICE_DEV_PORT
+    #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 0, 0)
+        /* RedHat 2.6.x backports place this member under netdev_extended */
+        port_num = netdev_extended(net_dev)->dev_port;
+    #else
+        port_num = net_dev->dev_port;
+    #endif
+    #endif
+
+    switch (info->cmd) {
+        case ETHTOOL_GRXCLSRLCNT:
+            info->data |= RX_CLS_LOC_SPECIAL;
+            info->rule_cnt = exanic->port[port_num].max_ip_filter_slots;
+            break;
+        default:
+            return -EOPNOTSUPP;
+    }
+    return rc;
+}
+
+static int exanic_ethtool_set_rxnfc(struct net_device *net_dev,
+			  struct ethtool_rxnfc *info)
+{
+	struct exanic_netdev_priv *priv = netdev_priv(net_dev);
+    struct exanic       *exanic = priv->exanic;
+    struct ethtool_rx_flow_spec *rule = &info->fs;
+    u32 flow_type = rule->flow_type & ~(FLOW_EXT | FLOW_RSS);
+    int ret;
+    unsigned port_num;
+
+    #if __HAS_NETDEVICE_DEV_PORT
+    #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 0, 0)
+        /* RedHat 2.6.x backports place this member under netdev_extended */
+        port_num = netdev_extended(net_dev)->dev_port;
+    #else
+        port_num = net_dev->dev_port;
+    #endif
+    #endif
+
+	if (port_num >= exanic->num_ports)
+        return -EINVAL;
+
+    if (rule->ring_cookie > exanic->max_filter_buffers)
+        return -EINVAL;
+
+    switch (info->cmd)
+    {
+        case ETHTOOL_SRXCLSRLINS:
+        {
+            struct exanic_ip_filter_slot filter;
+            struct ethtool_tcpip4_spec *ip_entry = &rule->h_u.tcp_ip4_spec;
+
+            filter.buffer = 0;
+            filter.protocol = (flow_type == TCP_V4_FLOW) ? IPPROTO_TCP
+                                : IPPROTO_UDP;
+            filter.src_addr = ip_entry->ip4src;
+            filter.dst_addr = ip_entry->ip4dst;
+            filter.src_port = ip_entry->psrc;
+            filter.dst_port = ip_entry->pdst;
+
+            mutex_lock(&exanic->mutex);
+            ret = exanic_insert_ip_filter(exanic, port_num,
+                                            &filter);
+            mutex_unlock(&exanic->mutex);
+            if (ret < 0)
+                return ret;
+            rule->location = ret;
+            netdev_info(net_dev, "rx_nfc SRXCLSRLINS srcip 0x%x rule id %d",
+                filter.src_addr, rule->location);
+            break;
+        }
+
+        case ETHTOOL_SRXCLSRLDEL:
+        {
+            if (rule->location >= exanic->port[port_num].max_ip_filter_slots)
+                return -EINVAL;
+            mutex_lock(&exanic->mutex);
+            ret = exanic_remove_ip_filter(exanic, port_num,
+                    rule->location);
+            mutex_unlock(&exanic->mutex);
+            netdev_info(net_dev, "rx_nfc SRXCLSRLDEL rule id %d ret %d",
+                rule->location, ret);
+            break;
+        }
+        case ETHTOOL_SRXFH:
+        default:
+            return -EOPNOTSUPP;
+    }
+    return ret;
+}
+
 static struct ethtool_ops exanic_ethtool_ops = {
     .get_drvinfo            = exanic_netdev_get_drvinfo,
     .get_link               = exanic_netdev_get_link,
@@ -1680,7 +1780,9 @@ static struct ethtool_ops exanic_ethtool_ops = {
     .get_eeprom_len         = exanic_netdev_get_eeprom_len,
     .get_eeprom             = exanic_netdev_get_eeprom,
     .set_eeprom             = exanic_netdev_set_eeprom,
-    .nway_reset             = exanic_netdev_restart_autoneg
+    .nway_reset             = exanic_netdev_restart_autoneg,
+    .set_rxnfc              = exanic_ethtool_set_rxnfc,
+    .get_rxnfc              = exanic_ethtool_get_rxnfc
 };
 
 #if __RH_ETHTOOL_OPS_EXT
