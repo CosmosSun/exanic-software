@@ -18,12 +18,17 @@
 #include <linux/netdev_features.h>
 #endif
 
+#include <linux/bpf.h>
+#include <linux/filter.h>
+#include <net/xdp.h>
+
 #include "../../libs/exanic/pcie_if.h"
 #include "../../libs/exanic/fifo_if.h"
 #include "../../libs/exanic/ioctl.h"
 #include "exanic.h"
 #include "exanic-i2c.h"
 #include "exanic-structs.h"
+#include "exanic-xsk.h"
 
 /**
  * Module command line parameters
@@ -97,6 +102,9 @@ struct exanic_netdev_rx
     volatile struct rx_chunk *buffer;
     uint32_t            next_chunk;
     uint8_t             generation;
+
+    //xdp rxq info
+    struct xdp_rxq_info xdp_rxq;
 };
 
 struct exanic_netdev_priv
@@ -762,6 +770,11 @@ static int exanic_netdev_kernel_start(struct net_device *ndev)
     /* Set interrupt to fire on the next packet to arrive */
     exanic_rx_set_irq(&priv->rx);
 
+    //set priv xdp rxq, default buffer 0
+    if (xdp_rxq_info_reg(&priv->rx.xdp_rxq, ndev, 0, 0)) {
+        netdev_info(ndev, "exanic set default xdp rxq failed\n");
+    }
+
     if (!(priv->exanic->caps & EXANIC_CAP_RX_IRQ))
     {
         netdev_info(ndev, "interrupts not available; "
@@ -1227,6 +1240,21 @@ int exanic_netdev_siocdevprivate(struct net_device *ndev, struct ifreq *ifr,
 }
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) */
 
+static int exanic_xdp(struct net_device *ndev, struct netdev_bpf *xdp)
+{
+    struct exanic_netdev_priv *priv = netdev_priv(ndev);
+
+    netdev_info(ndev, "ExaNIC xdp: command %d\n", xdp->command);
+    switch(xdp->command) {
+        case XDP_SETUP_PROG:
+            return exanic_xdp_setup_prog(priv->exanic, xdp->prog);
+        case XDP_SETUP_XSK_POOL:
+            return -ENOTSUPP;
+        default:
+            return -EINVAL;
+    }
+}
+
 static struct net_device_ops exanic_ndos = {
     .ndo_open                = exanic_netdev_open,
     .ndo_stop                = exanic_netdev_stop,
@@ -1252,7 +1280,7 @@ static struct net_device_ops exanic_ndos = {
 #ifdef NETIF_F_RXALL
     .ndo_set_features        = exanic_set_features,
 #endif
-
+    .ndo_bpf                 = exanic_xdp,
 };
 
 #ifdef ETHTOOL_GLINKSETTINGS
@@ -1283,7 +1311,7 @@ static int exanic_netdev_set_settings(struct net_device *ndev,
     int port_no = priv->port;
     struct mutex *mutex = exanic_mutex(priv->exanic);
     int ret;
-    
+
     mutex_lock(mutex);
     ret = exanic_phyops_set_configs(exanic, port_no, settings);
     mutex_unlock(mutex);
@@ -1637,7 +1665,7 @@ static int exanic_netdev_set_eeprom(struct net_device *ndev,
 }
 
 static int exanic_ethtool_get_rxnfc(struct net_device *net_dev,
-			  struct ethtool_rxnfc *info,
+              struct ethtool_rxnfc *info,
               u32 *rule_locs)
 {
     struct exanic_netdev_priv *priv = netdev_priv(net_dev);
@@ -1666,9 +1694,9 @@ static int exanic_ethtool_get_rxnfc(struct net_device *net_dev,
 }
 
 static int exanic_ethtool_set_rxnfc(struct net_device *net_dev,
-			  struct ethtool_rxnfc *info)
+              struct ethtool_rxnfc *info)
 {
-	struct exanic_netdev_priv *priv = netdev_priv(net_dev);
+    struct exanic_netdev_priv *priv = netdev_priv(net_dev);
     struct exanic       *exanic = priv->exanic;
     struct ethtool_rx_flow_spec *rule = &info->fs;
     u32 flow_type = rule->flow_type & ~(FLOW_EXT | FLOW_RSS);
@@ -1684,11 +1712,27 @@ static int exanic_ethtool_set_rxnfc(struct net_device *net_dev,
     #endif
     #endif
 
-	if (port_num >= exanic->num_ports)
+    if (port_num >= exanic->num_ports)
         return -EINVAL;
 
     if (rule->ring_cookie > exanic->max_filter_buffers)
         return -EINVAL;
+
+    /*default rx buffer not support rxnfc*/
+    struct exanic_port *port = &exanic->port[port_num];
+    bool no_filter_buffers = true;
+    int i;
+    for (i = 0; i < exanic->max_filter_buffers; i++) {
+        if (port->filter_buffers[i].region_virt) {
+            no_filter_buffers = false;
+            break;
+        }
+    }
+    if (no_filter_buffers) {
+        netdev_info(net_dev, "exanic_ethtool_set_rxnfc no filter buffers\n");
+        rule->location = 0;
+        return 0;
+    }
 
     switch (info->cmd)
     {
@@ -1820,6 +1864,95 @@ static void exanic_deliver_skb(struct sk_buff *skb)
 }
 
 /**
+ * not zc rcv
+ */
+static int exanic_xdp_rx(struct exanic_netdev_priv *priv, struct sk_buff *skb)
+{
+    struct bpf_prog *xdp_prog;
+    struct xdp_buff xdp_buf, *xdp_ptr;
+    uint32_t act = XDP_PASS;
+    void *orig_data, *orig_data_end, *hard_start;
+    size_t frame_size;
+    int rc, off;
+
+    xdp_prog = READ_ONCE(priv->exanic->xdp_prog);
+
+    if (!xdp_prog)
+        return XDP_PASS;
+
+    /* XDP packets must be linear and must have sufficient headroom
+     * of XDP_PACKET_HEADROOM bytes. This is the guarantee that also
+     * native XDP provides, thus we need to do it here as well.
+     */
+    if (skb_is_nonlinear(skb) ||
+        skb_headroom(skb) < XDP_PACKET_HEADROOM) {
+        int hroom = XDP_PACKET_HEADROOM - skb_headroom(skb);
+        int troom = skb->tail + skb->data_len - skb->end;
+        
+        /* In case we have to go down the path and also linearize,
+         * then lets do the pskb_expand_head() work just once here.
+         */
+        if (pskb_expand_head(skb,
+                     hroom > 0 ? ALIGN(hroom, NET_SKB_PAD) : 0,
+                     troom > 0 ? troom + 128 : 0, GFP_ATOMIC))
+            return XDP_DROP;
+        if (skb_linearize(skb))
+            return XDP_DROP;
+    }
+
+    xdp_ptr = &xdp_buf;
+    hard_start = skb->data - skb_headroom(skb);
+    frame_size = (void *)skb_end_pointer(skb) - hard_start;
+    frame_size += SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+
+    //per rxq per xdp_rxq，include dev and que id !!!
+    xdp_init_buff(xdp_ptr, frame_size, &priv->rx.xdp_rxq);
+
+    xdp_prepare_buff(xdp_ptr, hard_start, skb_headroom(skb), skb_headlen(skb), true);
+    orig_data_end = xdp_ptr->data_end;
+    orig_data = xdp_ptr->data;
+
+    act = bpf_prog_run_xdp(xdp_prog, xdp_ptr);
+
+    /* check if bpf_xdp_adjust_head was used. */
+    off = xdp_ptr->data - orig_data;
+    if (off > 0)
+        __skb_pull(skb, off);
+    else if (off < 0)
+        __skb_push(skb, -off);
+
+    /* check if bpf_xdp_adjust_tail was used. */
+    off = xdp_ptr->data_end - orig_data_end;
+    if (off != 0) {
+        skb_set_tail_pointer(skb, xdp_ptr->data_end - xdp_ptr->data);
+        skb->len += off;
+    }
+
+    switch (act) {
+        case XDP_REDIRECT:
+            netdev_info(priv->ndev, "exanic_xdp_rx: before redirect, frame_size %lu hard_start %p len %d\n",
+                frame_size, hard_start, skb_headlen(skb));
+            //rc = xdp_do_redirect(priv->ndev, xdp_ptr, xdp_prog);
+            rc = xdp_do_generic_redirect(priv->ndev, skb, xdp_ptr, xdp_prog);
+            if (rc) {
+                netdev_info(priv->ndev, "xdp redirect failed\n");
+                kfree_skb(skb);
+                act = XDP_DROP;
+            }
+            break;
+        case XDP_PASS:
+            break;
+        case XDP_TX:
+            //now not support
+            break;
+        default:
+            act = XDP_DROP;
+    }
+
+    return act;
+}
+
+/**
  * Poll for new packets on an ExaNIC interface.
  */
 static int exanic_netdev_poll(struct napi_struct *napi, int budget)
@@ -1938,11 +2071,20 @@ static int exanic_netdev_poll(struct napi_struct *napi, int budget)
                 continue;
             }
 
+            //netdev_info(ndev, "exanic rx poll skb len1 %d\n", priv->skb->len);
             /* Take the last 4B (CRC) off the frame unless user wants it */
 #ifdef NETIF_F_RXFCS
             if ( !(ndev->features & NETIF_F_RXFCS) )
 #endif
                 skb_trim(priv->skb, priv->skb->len - 4);
+
+            //netdev_info(ndev, "exanic rx poll skb len2 %d\n", priv->skb->len);
+            if (XDP_PASS != exanic_xdp_rx(priv, priv->skb)) {
+                //dev_kfree_skb(priv->skb);
+                priv->skb = NULL;
+                received++;
+                continue;
+            }
 
             priv->skb->protocol = eth_type_trans(priv->skb, ndev);
 

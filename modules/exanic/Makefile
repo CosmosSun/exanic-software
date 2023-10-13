@@ -1,7 +1,7 @@
 ifneq ($(PATCHLEVEL),) # kbuild part of makefile
 obj-m := exanic.o
 exanic-objs := exanic-main.o exanic-filter.o exanic-ctx.o exanic-dev.o exanic-netdev.o exanic-ptp.o exanic-ate.o \
-			   exanic-i2c.o exanic-sysfs.o exanic-phyops.o exanic-phyops-cmis.o
+			   exanic-i2c.o exanic-sysfs.o exanic-phyops.o exanic-phyops-cmis.o exanic-xsk.o
 
 # detect kernel features that cannot be reliably detected by version
 RH_ETHTOOL_OPS_EXT := ${shell egrep -c 'ethtool_ops_ext\b' $(srctree)/include/linux/ethtool.h}

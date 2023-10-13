@@ -160,6 +160,11 @@ struct exanic
     struct i2c_adapter *xcvr_i2c_adapters[EXANIC_MAX_PORTS];
     struct i2c_adapter *ext_phy_i2c_adapters[EXANIC_MAX_PORTS];
     struct i2c_adapter *eep_i2c_adapter;
+
+//#ifdef  EXANIC_HAVE_XDP
+    struct bpf_prog *xdp_prog;
+    int zc; // default zero by kzalloc exanic
+//#endif
 };
 
 /* Each context holds a reference to buffers it
