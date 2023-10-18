@@ -1932,11 +1932,10 @@ static int exanic_xdp_rx(struct exanic_netdev_priv *priv, struct sk_buff *skb)
         case XDP_REDIRECT:
             netdev_info(priv->ndev, "exanic_xdp_rx: before redirect, frame_size %lu hard_start %p len %d\n",
                 frame_size, hard_start, skb_headlen(skb));
-            //rc = xdp_do_redirect(priv->ndev, xdp_ptr, xdp_prog);
-            rc = xdp_do_generic_redirect(priv->ndev, skb, xdp_ptr, xdp_prog);
+            rc = xdp_do_redirect(priv->ndev, xdp_ptr, xdp_prog);
             if (rc) {
                 netdev_info(priv->ndev, "xdp redirect failed\n");
-                kfree_skb(skb);
+                //kfree_skb(skb);
                 act = XDP_DROP;
             }
             break;
@@ -2080,7 +2079,6 @@ static int exanic_netdev_poll(struct napi_struct *napi, int budget)
 
             //netdev_info(ndev, "exanic rx poll skb len2 %d\n", priv->skb->len);
             if (XDP_PASS != exanic_xdp_rx(priv, priv->skb)) {
-                //dev_kfree_skb(priv->skb);
                 priv->skb = NULL;
                 received++;
                 continue;
