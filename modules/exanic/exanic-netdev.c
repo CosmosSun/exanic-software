@@ -1359,7 +1359,11 @@ int exanic_xdp_tx(struct net_device *ndev, u32 queue_id)
     unsigned long flags;
     int err;
     uint32_t nb_completed;
+    //static int call_num = 0;
+    //static int xmit_num = 0;
     
+    //call_num++;
+
     //wrap case
     nb_completed = (priv->tx.xsk_seq > priv->tx.prev_xsk_seq)
                     ? priv->tx.xsk_seq - priv->tx.prev_xsk_seq
@@ -1381,6 +1385,9 @@ xmit:
     	if (!xsk_tx_peek_desc(priv->tx.xsk_pool, &desc))
     		break;
 
+        //xmit_num++;
+        //netdev_info(ndev, "before exanic_transmit_xdp_frame xmit_num %d call_num %d\n",
+        //            xmit_num, call_num);
         pkt_cnt++;
         spin_lock_irqsave(&priv->tx_lock, flags);
         if (priv->tx.buffer == NULL)
@@ -1408,6 +1415,24 @@ xmit:
 
 int exanic_xsk_wakeup(struct net_device *ndev, u32 queue_id, u32 flags)
 {
+    struct exanic_netdev_priv *priv = netdev_priv(ndev);
+
+    if ((NULL == priv->exanic->xdp_prog) || (NULL == priv->tx.xsk_pool))
+        return -ENXIO;
+#ifdef EXANIC_XDP_TX_NAPI
+    if (!napi_if_scheduled_mark_missed(&priv->napi))
+    {
+        exanic_rx_set_irq(&priv->rx);
+        netdev_info(ndev, "not in napi poll, set irq\n");
+    }
+    else
+    {
+        netdev_info(ndev, "in napi poll, set miss state\n");
+    }
+#else
+    //exanic xdp xmit pkts
+    exanic_xdp_tx(priv->ndev, 0);
+#endif
     return 0;
 }
 
@@ -2525,9 +2550,10 @@ static int exanic_netdev_poll(struct napi_struct *napi, int budget)
 
     if (xdp_prog && priv->rx.xsk_pool) 
     {
+#ifdef EXANIC_XDP_TX_NAPI
         //exanic xdp xmit pkts
         exanic_xdp_tx(priv->ndev, 0);
-
+#endif
         //xdp rx
         received = exanic_xdp_run_rx(napi, budget);
     }
