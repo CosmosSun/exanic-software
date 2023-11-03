@@ -83,6 +83,8 @@ MODULE_PARM_DESC(txbuf_size_min,
 /* Minimum size of TX buffer in bytes */
 #define MIN_TX_BUF_SIZE                 (txbuf_size_min * 1024)
 
+#define EXANIC_XDP_TX_BATCH               16
+
 struct exanic_netdev_tx
 {
     unsigned            feedback_slot;
@@ -615,9 +617,9 @@ static int exanic_transmit_frame(struct exanic_netdev_tx *tx,
     return 0;
 }
  
- static int exanic_transmit_xdp_frame(struct exanic_netdev_tx *tx,
+static int exanic_transmit_xdp_frame(struct exanic_netdev_tx *tx,
                                   struct xdp_desc *desc)
- {
+{
     size_t padding = exanic_payload_padding_bytes(EXANIC_TX_TYPE_RAW);
     size_t chunk_size = desc->len + padding + sizeof(struct tx_chunk);
     struct tx_chunk *chunk;
@@ -641,7 +643,42 @@ static int exanic_transmit_frame(struct exanic_netdev_tx *tx,
     exanic_send_tx_chunk(tx, chunk_size);
     tx->xsk_seq++;
     return 0;
- }
+}
+
+static int exanic_transmit_xdp_frames(struct exanic_netdev_tx *tx,
+                                  struct xdp_desc *descs, uint32_t batch)
+{
+    size_t padding = exanic_payload_padding_bytes(EXANIC_TX_TYPE_RAW);
+    size_t chunk_size;
+    struct tx_chunk *chunk;
+    uint32_t len = 0;
+    uint32_t i;
+
+    for (i = 0; i < batch; i++)
+    {
+        chunk_size = descs[i].len + padding + sizeof(struct tx_chunk);
+        chunk = exanic_prepare_tx_chunk(tx, chunk_size);
+        if (chunk == NULL)
+            return -1;
+
+        writew(descs[i].len + padding, &chunk->length);
+        writeb(EXANIC_TX_TYPE_RAW, &chunk->type);
+        writeb(0, &chunk->flags);
+
+        memcpy_toio(chunk->payload + padding,
+                    xsk_buff_raw_get_data(tx->xsk_pool, descs[i].addr),
+                    descs[i].len);
+
+        //#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
+        //     skb_tx_timestamp(skb);
+        //#endif
+
+        exanic_send_tx_chunk(tx, chunk_size);
+        tx->xsk_seq++;
+        len += descs[i].len;
+    }
+    return len;
+}
 
 static int exanic_transmit_payload(struct exanic_netdev_tx* tx,
                                    int connection_id, const char *payload,
@@ -845,6 +882,7 @@ static void exanic_netdev_kernel_stop(struct net_device *ndev)
 {
     struct exanic_netdev_priv *priv = netdev_priv(ndev);
     unsigned long flags;
+    uint32_t nb_completed;
 
     /* This flag stops the timer as well as the irq handler */
     priv->rx_enabled = false;
@@ -859,6 +897,19 @@ static void exanic_netdev_kernel_stop(struct net_device *ndev)
 
     napi_disable(&priv->napi);
     netif_stop_queue(ndev);
+
+    //xdp tx complete, consider wrap case
+    if (priv->tx.xsk_pool)
+    {
+        netdev_info(ndev, "xsk_seq %u prev_xsk_seq %u\n",
+            priv->tx.xsk_seq,
+            priv->tx.prev_xsk_seq);
+        nb_completed = (priv->tx.xsk_seq >= priv->tx.prev_xsk_seq)
+            ? priv->tx.xsk_seq - priv->tx.prev_xsk_seq
+            : ((uint32_t)~0) - priv->tx.prev_xsk_seq + priv->tx.xsk_seq + 1;
+        if (nb_completed)
+            xsk_tx_completed(priv->tx.xsk_pool, nb_completed);
+    }
 
     /* Discard partially received packet */
     if (priv->skb != NULL)
@@ -1302,6 +1353,7 @@ static int exanic_xdp(struct net_device *ndev, struct netdev_bpf *xdp)
             //normally disable&enable que irq, napi, clean bufs, reset stats           
             if (NULL == xdp->xsk.pool)
             {
+                //memset rx & tx zero
                 if (if_running)
                     exanic_netdev_kernel_stop(ndev);
 
@@ -1312,6 +1364,7 @@ static int exanic_xdp(struct net_device *ndev, struct netdev_bpf *xdp)
                 //free xdp ptr
                 if (priv->xdp_ptr) {
                     xsk_buff_free(priv->xdp_ptr);
+                    priv->xdp_ptr = NULL;
                 }
 
                 if (if_running)
@@ -1365,7 +1418,7 @@ int exanic_xdp_tx(struct net_device *ndev, u32 queue_id)
     //call_num++;
 
     //wrap case
-    nb_completed = (priv->tx.xsk_seq > priv->tx.prev_xsk_seq)
+    nb_completed = (priv->tx.xsk_seq >= priv->tx.prev_xsk_seq)
                     ? priv->tx.xsk_seq - priv->tx.prev_xsk_seq
                     : ((uint32_t)~0) - priv->tx.prev_xsk_seq + priv->tx.xsk_seq + 1;
     
@@ -1413,6 +1466,63 @@ xmit:
     return 0;
 }
 
+int exanic_xdp_tx_batch(struct net_device *ndev, u32 queue_id)
+{
+    struct exanic_netdev_priv *priv = netdev_priv(ndev);
+    unsigned long flags;
+    int err;
+    uint32_t nb_completed;
+    struct xdp_desc descs[EXANIC_XDP_TX_BATCH];
+    uint32_t nb_pkts;
+
+    //if (NULL == priv->tx.xsk_pool)
+    //    return 0;
+
+    //wrap case
+    nb_completed = (priv->tx.xsk_seq >= priv->tx.prev_xsk_seq)
+                    ? priv->tx.xsk_seq - priv->tx.prev_xsk_seq
+                    : ((uint32_t)~0) - priv->tx.prev_xsk_seq + priv->tx.xsk_seq + 1;
+
+    if (0 == nb_completed)
+    {
+        goto xmit;
+    }
+    xsk_tx_completed(priv->tx.xsk_pool, nb_completed);
+
+xmit:
+    // If the flag is set for the TX ring, it means that the application
+    // needs to explicitly notify the kernel to send any packets put on the TX ring.
+    if (xsk_uses_need_wakeup(priv->tx.xsk_pool))
+        xsk_set_tx_need_wakeup(priv->tx.xsk_pool);
+
+    priv->tx.prev_xsk_seq = priv->tx.xsk_seq;
+
+    nb_pkts = xsk_tx_peek_release_desc_batch(priv->tx.xsk_pool,
+                                             descs, EXANIC_XDP_TX_BATCH);
+    if (!nb_pkts)
+        return 0;
+
+    spin_lock_irqsave(&priv->tx_lock, flags);
+    if (priv->tx.buffer == NULL)
+    {
+        /* exanic_netdev_kernel_stop may have freed the buffer */
+        spin_unlock_irqrestore(&priv->tx_lock, flags);
+        ndev->stats.tx_errors++;
+        return 0;
+    }
+    err = exanic_transmit_xdp_frames(&priv->tx, descs, nb_pkts);
+    spin_unlock_irqrestore(&priv->tx_lock, flags);
+
+    if (0 > err)
+        ndev->stats.tx_errors++;
+    else
+    {
+        ndev->stats.tx_packets += nb_pkts;
+        ndev->stats.tx_bytes += err;
+    }
+    return 0;
+}
+
 int exanic_xsk_wakeup(struct net_device *ndev, u32 queue_id, u32 flags)
 {
     struct exanic_netdev_priv *priv = netdev_priv(ndev);
@@ -1423,15 +1533,15 @@ int exanic_xsk_wakeup(struct net_device *ndev, u32 queue_id, u32 flags)
     if (!napi_if_scheduled_mark_missed(&priv->napi))
     {
         exanic_rx_set_irq(&priv->rx);
-        netdev_info(ndev, "not in napi poll, set irq\n");
+        netdev_info(ndev, "exanic_xsk_wakeup: not in napi poll, set irq\n");
     }
     else
     {
-        netdev_info(ndev, "in napi poll, set miss state\n");
+        netdev_info(ndev, "exanic_xsk_wakeup: in napi poll, set miss state\n");
     }
 #else
     //exanic xdp xmit pkts
-    exanic_xdp_tx(priv->ndev, 0);
+    exanic_xdp_tx_batch(ndev, 0);
 #endif
     return 0;
 }
@@ -2152,6 +2262,7 @@ static int exanic_xdp_run_rx(struct napi_struct *napi, int budget)
     uint16_t data_len, remain_len;
     uint32_t act = XDP_PASS;
     struct sk_buff *skb;
+    uint32_t xsk_received = 0;
 
     while (received < budget && chunk_count < POLL_MAX_CHUNKS)
     {
@@ -2298,6 +2409,7 @@ static int exanic_xdp_run_rx(struct napi_struct *napi, int budget)
                 ndev->stats.rx_bytes += (priv->xdp_ptr->data_end - priv->xdp_ptr->data);
                 priv->xdp_ptr = NULL;
                 received++;
+                xsk_received++;
                 continue;
             }
             if (XDP_DROP == act)
@@ -2364,14 +2476,16 @@ static int exanic_xdp_run_rx(struct napi_struct *napi, int budget)
         }
     }
 
-    if (priv->xdp_ptr != NULL && (priv->xdp_ptr->data_end - priv->xdp_ptr->data) == 0)
+    //free xdp buf with data
+    if (priv->xdp_ptr != NULL && (priv->xdp_ptr->data_end - priv->xdp_ptr->data) != 0)
     {
         xsk_buff_free(priv->xdp_ptr);
         priv->xdp_ptr = NULL;
     }
 
     //!!flush rx pkt to xdp rx ring!!
-    if (received > 0)
+    //expensive cost
+    if (xsk_received > 0)
     {
         xdp_do_flush_map();
     }
@@ -2552,7 +2666,7 @@ static int exanic_netdev_poll(struct napi_struct *napi, int budget)
     {
 #ifdef EXANIC_XDP_TX_NAPI
         //exanic xdp xmit pkts
-        exanic_xdp_tx(priv->ndev, 0);
+        exanic_xdp_tx_batch(priv->ndev, 0);
 #endif
         //xdp rx
         received = exanic_xdp_run_rx(napi, budget);
