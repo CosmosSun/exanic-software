@@ -1332,6 +1332,7 @@ int exanic_netdev_siocdevprivate(struct net_device *ndev, struct ifreq *ifr,
 static int exanic_xdp(struct net_device *ndev, struct netdev_bpf *xdp)
 {
     struct exanic_netdev_priv *priv = netdev_priv(ndev);
+    uint32_t rx_coalesce_timeout_ns;
     int if_running = netif_running(ndev);
     int ret;
 
@@ -1353,6 +1354,8 @@ static int exanic_xdp(struct net_device *ndev, struct netdev_bpf *xdp)
             //normally disable&enable que irq, napi, clean bufs, reset stats           
             if (NULL == xdp->xsk.pool)
             {
+                rx_coalesce_timeout_ns = priv->rx_coalesce_timeout_ns;
+
                 //memset rx & tx zero
                 if (if_running)
                     exanic_netdev_kernel_stop(ndev);
@@ -1369,6 +1372,9 @@ static int exanic_xdp(struct net_device *ndev, struct netdev_bpf *xdp)
 
                 if (if_running)
                     exanic_netdev_kernel_start(ndev);
+
+                //restore rx_coalesce_timeout_ns
+                priv->rx_coalesce_timeout_ns = rx_coalesce_timeout_ns;
                 netdev_info(ndev, "ExaNIC xdp: if_running %d disable xsk pool done\n",
                             if_running);
                 return 0;
