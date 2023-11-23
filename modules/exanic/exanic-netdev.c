@@ -2016,7 +2016,16 @@ static int exanic_ethtool_set_rxnfc(struct net_device *net_dev,
     if (rule->ring_cookie > exanic->max_filter_buffers)
         return -EINVAL;
 
-    /*default rx buffer not support rxnfc*/
+    //only support ipv4
+    if (flow_type & (UDP_V6_FLOW | TCP_V6_FLOW)) {
+        netdev_err(net_dev, "set rxnfc not support ipv6\n");
+        return -EINVAL;
+    }
+
+    /*
+    * default rx buffer not support rxnfc
+    * check whether has filter buffers
+    */
     struct exanic_port *port = &exanic->port[port_num];
     bool no_filter_buffers = true;
     int i;
@@ -2039,7 +2048,8 @@ static int exanic_ethtool_set_rxnfc(struct net_device *net_dev,
             struct exanic_ip_filter_slot filter;
             struct ethtool_tcpip4_spec *ip_entry = &rule->h_u.tcp_ip4_spec;
 
-            filter.buffer = 0;
+            //set filter buffer number
+            filter.buffer = rule->ring_cookie;
             filter.protocol = (flow_type == TCP_V4_FLOW) ? IPPROTO_TCP
                                 : IPPROTO_UDP;
             filter.src_addr = ip_entry->ip4src;
