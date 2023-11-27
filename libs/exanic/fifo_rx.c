@@ -10,6 +10,7 @@
 #include "port.h"
 #include "ioctl.h"
 #include "util.h"
+#include "syscall.h"
 
 exanic_rx_t * exanic_acquire_rx_buffer(exanic_t *exanic, int port_number,
                                        int buffer_number)
@@ -39,7 +40,7 @@ exanic_rx_t * exanic_acquire_rx_buffer(exanic_t *exanic, int port_number,
         struct exanicctl_rx_filter_buffer_alloc arg;
         arg.port_number = port_number;
         arg.buffer_number = buffer_number - 1;
-        if (ioctl(exanic->fd, EXANICCTL_RX_FILTER_BUFFER_ALLOC_EX,
+        if (exanic_sys_ioctl(exanic->fd, EXANICCTL_RX_FILTER_BUFFER_ALLOC_EX,
                   &arg) != 0)
         {
             exanic_err_printf("EXANICCTL_RX_FILTER_BUFFER_ALLOC_EX failed: %s",
@@ -109,7 +110,7 @@ exanic_rx_t * exanic_acquire_unused_filter_buffer(exanic_t *exanic,
     struct exanicctl_rx_filter_buffer_alloc arg;
     arg.port_number = port_number;
     arg.buffer_number = UINT_MAX;
-    if (ioctl(exanic->fd, EXANICCTL_RX_FILTER_BUFFER_ALLOC_EX,
+    if (exanic_sys_ioctl(exanic->fd, EXANICCTL_RX_FILTER_BUFFER_ALLOC_EX,
               &arg) != 0)
     {
         exanic_err_printf("EXANICCTL_RX_FILTER_BUFFER_ALLOC_EX failed: %s",
@@ -195,7 +196,7 @@ int exanic_enable_flow_hashing(exanic_t *exanic, int port_number,
         struct exanicctl_rx_filter_buffer_free arg;
         arg.port_number = port_number;
         arg.buffer_number = num_buffers - 1;
-        ioctl(exanic->fd, EXANICCTL_RX_FILTER_BUFFER_FREE, &arg);
+        exanic_sys_ioctl(exanic->fd, EXANICCTL_RX_FILTER_BUFFER_FREE, &arg);
         num_buffers--;
     }
 
@@ -206,7 +207,7 @@ int exanic_enable_flow_hashing(exanic_t *exanic, int port_number,
         arg.enable = 1;
         arg.mask = num_buffers - 1;
         arg.function = hash_function;
-        ioctl(exanic->fd, EXANICCTL_RX_HASH_CONFIGURE, &arg);
+        exanic_sys_ioctl(exanic->fd, EXANICCTL_RX_HASH_CONFIGURE, &arg);
     }
 
     return num_buffers;
@@ -221,7 +222,7 @@ void exanic_disable_flow_hashing(exanic_t *exanic, int port_number)
     arg.mask = 0;
     arg.function = 0;
 
-    ioctl(exanic->fd, EXANICCTL_RX_HASH_CONFIGURE, &arg);
+    exanic_sys_ioctl(exanic->fd, EXANICCTL_RX_HASH_CONFIGURE, &arg);
 }
 
 void exanic_release_rx_buffer(exanic_rx_t *rx)
@@ -236,7 +237,7 @@ void exanic_release_rx_buffer(exanic_rx_t *rx)
         struct exanicctl_rx_filter_buffer_free arg;
         arg.port_number = rx->port_number;
         arg.buffer_number = rx->buffer_number-1;
-        ioctl(rx->exanic->fd, EXANICCTL_RX_FILTER_BUFFER_FREE,
+        exanic_sys_ioctl(rx->exanic->fd, EXANICCTL_RX_FILTER_BUFFER_FREE,
               &arg);
     }
 

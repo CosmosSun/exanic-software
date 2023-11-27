@@ -22,6 +22,7 @@
 #include "port.h"
 #include "util.h"
 #include "exanic_bonding.h"
+#include "syscall.h"
 
 static int check_exanic_and_port_number(exanic_t *exanic, int port_number)
 {
@@ -217,7 +218,7 @@ int exanic_find_port_by_interface_name(const char *name, char *device,
         return 0;
     }
 
-    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    fd = exanic_sys_socket(AF_INET, SOCK_DGRAM, 0);
 
     /* Check that the interface is an exanic interface */
     memset(&ifr, 0, sizeof(ifr));
@@ -226,7 +227,7 @@ int exanic_find_port_by_interface_name(const char *name, char *device,
     strncpy(ifr.ifr_name, name, IFNAMSIZ - 1);
     ifr.ifr_data = (void *)&drvinfo;
 
-    if (ioctl(fd, SIOCETHTOOL, &ifr) == -1)
+    if (exanic_sys_ioctl(fd, SIOCETHTOOL, &ifr) == -1)
     {
         exanic_err_printf("interface not found: %s", strerror(errno));
         close(fd);
@@ -246,7 +247,7 @@ int exanic_find_port_by_interface_name(const char *name, char *device,
     strncpy(ifr.ifr_name, name, IFNAMSIZ - 1);
     ifr.ifr_data = (void *)&exainfo;
 
-    if (ioctl(fd, EXAIOCGIFINFO, &ifr) == -1)
+    if (exanic_sys_ioctl(fd, EXAIOCGIFINFO, &ifr) == -1)
     {
         exanic_err_printf("EXAIOCGIFINFO ioctl failed: %s", strerror(errno));
         close(fd);
@@ -257,7 +258,7 @@ int exanic_find_port_by_interface_name(const char *name, char *device,
     device[device_len - 1] = '\0';
     *port_number = exainfo.port_num;
 
-    close(fd);
+    exanic_sys_close(fd);
     return 0;
 }
 

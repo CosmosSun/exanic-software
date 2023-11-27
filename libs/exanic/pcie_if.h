@@ -12,7 +12,11 @@
 #define EXANIC_PCIE_IF_H
 
 #ifndef PAGE_SIZE
+#if defined(__i386__) || defined(__x86_64__)
 #define PAGE_SIZE 4096UL
+#else
+#error "Unsupported Platform"
+#endif
 #endif
 
 /**

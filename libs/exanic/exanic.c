@@ -13,6 +13,7 @@
 #include "pcie_if.h"
 #include "hw_info.h"
 #include "ioctl.h"
+#include "syscall.h"
 
 static exanic_t *exanic_list = NULL;
 
@@ -33,7 +34,7 @@ exanic_t * exanic_acquire_handle(const char *device_name)
     snprintf(device_file, sizeof(device_file), "/dev/%s", device_name);
 
     /* Open the device file */
-    int fd = open(device_file, O_RDWR);
+    int fd = exanic_sys_open(device_file, O_RDWR);
     if (fd == -1)
     {
         exanic_err_printf("device open failed: %s", strerror(errno));
@@ -41,7 +42,7 @@ exanic_t * exanic_acquire_handle(const char *device_name)
     }
 
     struct exanicctl_info_ex2 info;
-    if (ioctl(fd, EXANICCTL_INFO_EX2, &info) != 0)
+    if (exanic_sys_ioctl(fd, EXANICCTL_INFO_EX2, &info) != 0)
     {
         struct exanicctl_info_ex old_info;
         if (ioctl(fd, EXANICCTL_INFO_EX, &old_info) != 0)
@@ -141,7 +142,7 @@ exanic_t * exanic_acquire_handle(const char *device_name)
     uint32_t *devkit_regs_region = NULL;
     void *devkit_mem_region = NULL;
 
-    if (ioctl(fd, EXANICCTL_DEVKIT_INFO, &devkit_info) == 0)
+    if (exanic_sys_ioctl(fd, EXANICCTL_DEVKIT_INFO, &devkit_info) == 0)
     {
         if (devkit_info.regs_size > 0)
         {
@@ -173,7 +174,7 @@ exanic_t * exanic_acquire_handle(const char *device_name)
     uint32_t *devkit_regs_ex_region = NULL;
     void *devkit_mem_ex_region = NULL;
 
-    if (ioctl(fd, EXANICCTL_DEVKIT_INFO_EX, &devkit_info_ex) == 0)
+    if (exanic_sys_ioctl(fd, EXANICCTL_DEVKIT_INFO_EX, &devkit_info_ex) == 0)
     {
         if (devkit_info_ex.regs_size > 0)
         {
@@ -261,7 +262,7 @@ err_mmap_feedback:
     munmap(registers, EXANIC_REGS_NUM_PAGES * PAGE_SIZE);
 err_mmap_registers:
 err_ioctl:
-    close(fd);
+    exanic_sys_close(fd);
 err_open:
     return NULL;
 }
@@ -310,7 +311,7 @@ void exanic_release_handle(exanic_t *exanic)
     if (exanic->info_page != NULL)
         munmap((void *)exanic->info_page, EXANIC_INFO_NUM_PAGES * PAGE_SIZE);
     munmap((void *)exanic->registers, EXANIC_REGS_NUM_PAGES * PAGE_SIZE);
-    close(exanic->fd);
+    exanic_sys_close(exanic->fd);
 
     free(exanic);
 }

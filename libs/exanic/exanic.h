@@ -99,6 +99,7 @@ const char * exanic_get_last_error(void);
 
 void exanic_err_printf(const char * fmt, ...);
 
+extern int exanic_syscall_init(void);
 #ifdef __cplusplus
 }
 #endif

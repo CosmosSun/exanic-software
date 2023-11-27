@@ -1,0 +1,31 @@
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <sys/stat.h>
+
+#if !defined(EXANIC_MK_DECL)
+# error Do not include this file unless you know what you are doing.
+#endif
+#ifndef EXANIC_MK_DECL_OPTIONAL
+#define EXANIC_MK_DECL_OPTIONAL EXANIC_MK_DECL
+#endif
+
+EXANIC_MK_DECL(int           , socket     , (int, int, int));
+EXANIC_MK_DECL(int           , bind       , (int, const struct sockaddr*, socklen_t));
+EXANIC_MK_DECL(int           , listen     , (int, int));
+EXANIC_MK_DECL(int           , shutdown   , (int, int));
+EXANIC_MK_DECL(int           , getsockname, (int, struct sockaddr*, socklen_t*));
+EXANIC_MK_DECL(int           , getpeername, (int, struct sockaddr*, socklen_t*));
+EXANIC_MK_DECL(int           , getsockopt , (int, int, int, void*, socklen_t*));
+EXANIC_MK_DECL(int           , setsockopt , (int, int, int, const void*, socklen_t));
+
+#ifdef __GLIBC__
+EXANIC_MK_DECL(int           , ioctl      , (int, unsigned long, ...));
+#else
+EXANIC_MK_DECL(int           , ioctl      , (int, int, ...));
+#endif
+
+EXANIC_MK_DECL(int           , close      , (int));
+EXANIC_MK_DECL(int           , open       , (const char*, int, ...));
+
+#undef EXANIC_MK_DECL
+#undef EXANIC_MK_DECL_OPTIONAL

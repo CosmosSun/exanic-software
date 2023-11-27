@@ -13,6 +13,7 @@
 #include "port.h"
 #include "register.h"
 #include "checksum.h"
+#include "syscall.h"
 
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 
@@ -42,7 +43,7 @@ static int exanic_alloc_tx_feedback_slot(exanic_t *exanic, int port_number)
 
     arg.port_number = port_number;
 
-    if (ioctl(exanic->fd, EXANICCTL_TX_FEEDBACK_ALLOC, &arg) != 0)
+    if (exanic_sys_ioctl(exanic->fd, EXANICCTL_TX_FEEDBACK_ALLOC, &arg) != 0)
     {
         exanic_err_printf("EXANICCTL_TX_FEEDBACK_ALLOC failed: %s",
                 strerror(errno));
@@ -60,7 +61,7 @@ static int exanic_free_tx_feedback_slot(exanic_t *exanic, int port_number,
     arg.port_number = port_number;
     arg.feedback_slot = feedback_slot;
 
-    if (ioctl(exanic->fd, EXANICCTL_TX_FEEDBACK_FREE, &arg) != 0)
+    if (exanic_sys_ioctl(exanic->fd, EXANICCTL_TX_FEEDBACK_FREE, &arg) != 0)
     {
         exanic_err_printf("EXANICCTL_TX_FEEDBACK_FREE failed: %s",
                 strerror(errno));
@@ -78,7 +79,7 @@ static size_t exanic_alloc_tx_buffer(exanic_t *exanic, int port_number,
     arg.port_number = port_number;
     arg.size = size;
 
-    if (ioctl(exanic->fd, EXANICCTL_TX_BUFFER_ALLOC, &arg) != 0)
+    if (exanic_sys_ioctl(exanic->fd, EXANICCTL_TX_BUFFER_ALLOC, &arg) != 0)
     {
         exanic_err_printf("EXANICCTL_TX_BUFFER_ALLOC failed: %s",
                 strerror(errno));
@@ -97,7 +98,7 @@ static int exanic_free_tx_buffer(exanic_t *exanic, int port_number,
     arg.size = size;
     arg.offset = buffer_offset;
 
-    if (ioctl(exanic->fd, EXANICCTL_TX_BUFFER_FREE, &arg) != 0)
+    if (exanic_sys_ioctl(exanic->fd, EXANICCTL_TX_BUFFER_FREE, &arg) != 0)
     {
         exanic_err_printf("EXANICCTL_TX_BUFFER_FREE failed: %s",
                 strerror(errno));

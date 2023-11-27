@@ -1,7 +1,7 @@
 PREFIX=/usr/local
 CC=gcc
 CFLAGS=-O3 -Wall -I../../libs
-LDLIBS=-L../../libs/exanic -lexanic -lpthread
+LDLIBS=-L../../libs/exanic -lexanic -lpthread -ldl
 
 BIN=exanic-rx-frame exanic-tx-frame exanic-rx-chunk-inplace exanic-tx-preload exanic-hpt-fiber-len exanic-measure exanic-benchmarker-stac-t0
 
