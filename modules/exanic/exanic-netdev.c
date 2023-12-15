@@ -2017,8 +2017,8 @@ static int exanic_ethtool_set_rxnfc(struct net_device *net_dev,
         return -EINVAL;
 
     //only support ipv4
-    if (flow_type & (UDP_V6_FLOW | TCP_V6_FLOW)) {
-        netdev_err(net_dev, "set rxnfc not support ipv6\n");
+    if ((UDP_V6_FLOW == flow_type) || (TCP_V6_FLOW == flow_type)) {
+        netdev_err(net_dev, "set rxnfc not support ipv6, flow_type 0x%x\n", flow_type);
         return -EINVAL;
     }
 
@@ -2047,7 +2047,6 @@ static int exanic_ethtool_set_rxnfc(struct net_device *net_dev,
         {
             struct exanic_ip_filter_slot filter;
             struct ethtool_tcpip4_spec *ip_entry = &rule->h_u.tcp_ip4_spec;
-
             //set filter buffer number
             filter.buffer = rule->ring_cookie;
             filter.protocol = (flow_type == TCP_V4_FLOW) ? IPPROTO_TCP
@@ -2064,8 +2063,8 @@ static int exanic_ethtool_set_rxnfc(struct net_device *net_dev,
             if (ret < 0)
                 return ret;
             rule->location = ret;
-            netdev_info(net_dev, "rx_nfc SRXCLSRLINS srcip 0x%x rule id %d",
-                filter.src_addr, rule->location);
+            netdev_info(net_dev, "SRXCLSRLINS port %u buffer_num %u dstip 0x%x dport %u rule id %d",
+                port_num, filter.buffer, filter.dst_addr, filter.dst_port, rule->location);
             break;
         }
 
@@ -2077,7 +2076,7 @@ static int exanic_ethtool_set_rxnfc(struct net_device *net_dev,
             ret = exanic_remove_ip_filter(exanic, port_num,
                     rule->location);
             mutex_unlock(&exanic->mutex);
-            netdev_info(net_dev, "rx_nfc SRXCLSRLDEL rule id %d ret %d",
+            netdev_info(net_dev, "SRXCLSRLDEL rule id %d ret %d",
                 rule->location, ret);
             break;
         }
