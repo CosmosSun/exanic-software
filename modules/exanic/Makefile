@@ -9,7 +9,8 @@ HAS_NETDEVICE_DEV_PORT := ${shell grep -c 'dev_port' $(srctree)/include/linux/ne
 USE_RH_NETDEV_CHANGE_MTU := ${shell grep -c 'RH_KABI_RENAME.*ndo_change_mtu' $(srctree)/include/linux/netdevice.h}
 HAS_KERNEL_ETHTOOL_COALESCE_STRUCT := ${shell egrep -c '^struct kernel_ethtool_coalesce' $(srctree)/include/linux/ethtool.h}
 ccflags-y := -D__HAS_NETDEVICE_DEV_PORT=$(HAS_NETDEVICE_DEV_PORT) -D__USE_RH_NETDEV_CHANGE_MTU=$(USE_RH_NETDEV_CHANGE_MTU) -D__RH_ETHTOOL_OPS_EXT=$(RH_ETHTOOL_OPS_EXT) -D__HAS_KERNEL_ETHTOOL_COALESCE=$(HAS_KERNEL_ETHTOOL_COALESCE_STRUCT)
-
+ccflags-y += -DHAVE_PSEUDO_XDP
+#ccflags-y += -DDEBUG
 else # normal part makefile
 
 KDIR ?= /lib/modules/`uname -r`/build

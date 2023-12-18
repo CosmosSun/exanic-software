@@ -645,6 +645,7 @@ static int exanic_transmit_xdp_frame(struct exanic_netdev_tx *tx,
     return 0;
 }
 
+#ifndef HAVE_PSEUDO_XDP
 static int exanic_transmit_xdp_frames(struct exanic_netdev_tx *tx,
                                   struct xdp_desc *descs, uint32_t batch)
 {
@@ -679,6 +680,7 @@ static int exanic_transmit_xdp_frames(struct exanic_netdev_tx *tx,
     }
     return len;
 }
+#endif
 
 static int exanic_transmit_payload(struct exanic_netdev_tx* tx,
                                    int connection_id, const char *payload,
@@ -1332,14 +1334,16 @@ int exanic_netdev_siocdevprivate(struct net_device *ndev, struct ifreq *ifr,
 static int exanic_xdp(struct net_device *ndev, struct netdev_bpf *xdp)
 {
     struct exanic_netdev_priv *priv = netdev_priv(ndev);
+#ifndef HAVE_PSEUDO_XDP
     uint32_t rx_coalesce_timeout_ns;
     int if_running = netif_running(ndev);
     int ret;
-
+#endif
     netdev_info(ndev, "ExaNIC xdp: command %d\n", xdp->command);
     switch(xdp->command) {
         case XDP_SETUP_PROG:
             return exanic_xdp_setup_prog(priv->exanic, xdp->prog);
+#ifndef HAVE_PSEUDO_XDP
         case XDP_SETUP_XSK_POOL:
             /*
             failed, harware reason
@@ -1405,11 +1409,13 @@ static int exanic_xdp(struct net_device *ndev, struct netdev_bpf *xdp)
                 priv->exanic->zc = true;
             }
             return ret;
+ #endif
         default:
             return -EINVAL;
     }
 }
 
+#ifndef HAVE_PSEUDO_XDP
 int exanic_xdp_tx(struct net_device *ndev, u32 queue_id)
 {
     struct exanic_netdev_priv *priv = netdev_priv(ndev);
@@ -1551,6 +1557,7 @@ int exanic_xsk_wakeup(struct net_device *ndev, u32 queue_id, u32 flags)
 #endif
     return 0;
 }
+#endif
 
 static struct net_device_ops exanic_ndos = {
     .ndo_open                = exanic_netdev_open,
@@ -1578,7 +1585,9 @@ static struct net_device_ops exanic_ndos = {
     .ndo_set_features        = exanic_set_features,
 #endif
     .ndo_bpf                 = exanic_xdp,
+#ifndef HAVE_PSEUDO_XDP
     .ndo_xsk_wakeup          = exanic_xsk_wakeup,
+#endif
 };
 
 #ifdef ETHTOOL_GLINKSETTINGS
@@ -2170,6 +2179,7 @@ static void exanic_deliver_skb(struct sk_buff *skb)
     netif_receive_skb(skb);
 }
 
+#ifndef HAVE_PSEUDO_XDP
 /**
  * not zc rcv
  */
@@ -2506,6 +2516,7 @@ static int exanic_xdp_run_rx(struct napi_struct *napi, int budget)
     }
     return received;
 }
+#endif
 
 /**
  * Poll for new packets on an ExaNIC interface.
@@ -2673,9 +2684,11 @@ static int exanic_netdev_poll(struct napi_struct *napi, int budget)
 {
     struct exanic_netdev_priv *priv =
         container_of(napi, struct exanic_netdev_priv, napi);    
-    struct bpf_prog *xdp_prog = READ_ONCE(priv->exanic->xdp_prog);
     int received;
     ktime_t interval;
+
+#ifndef HAVE_PSEUDO_XDP
+    struct bpf_prog *xdp_prog = READ_ONCE(priv->exanic->xdp_prog);
 
     if (xdp_prog && priv->rx.xsk_pool) 
     {
@@ -2687,6 +2700,7 @@ static int exanic_netdev_poll(struct napi_struct *napi, int budget)
         received = exanic_xdp_run_rx(napi, budget);
     }
     else
+#endif
     {
         received = exanic_netdev_poll_skb(napi, budget);
     }
