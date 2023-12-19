@@ -616,7 +616,8 @@ static int exanic_transmit_frame(struct exanic_netdev_tx *tx,
     exanic_send_tx_chunk(tx, chunk_size);
     return 0;
 }
- 
+
+#ifndef HAVE_PSEUDO_XDP
 static int exanic_transmit_xdp_frame(struct exanic_netdev_tx *tx,
                                   struct xdp_desc *desc)
 {
@@ -645,7 +646,6 @@ static int exanic_transmit_xdp_frame(struct exanic_netdev_tx *tx,
     return 0;
 }
 
-#ifndef HAVE_PSEUDO_XDP
 static int exanic_transmit_xdp_frames(struct exanic_netdev_tx *tx,
                                   struct xdp_desc *descs, uint32_t batch)
 {
@@ -2044,8 +2044,10 @@ static int exanic_ethtool_set_rxnfc(struct net_device *net_dev,
             break;
         }
     }
-    if (no_filter_buffers) {
-        netdev_info(net_dev, "exanic_ethtool_set_rxnfc no filter buffers\n");
+    //ETHTOOL_SRXCLSRLDEL may after release buffer
+    if ((ETHTOOL_SRXCLSRLINS == info->cmd) && no_filter_buffers) {
+        netdev_info(net_dev, "exanic_ethtool_set_rxnfc port %u no filter buffers\n",
+                    port_num);
         rule->location = 0;
         return 0;
     }
